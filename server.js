@@ -3,28 +3,19 @@ const mongoose = require("mongoose");
 const cors = require("cors");
 const dotenv = require("dotenv");
 const multer = require("multer");
-const path = require("path");
 const cloudinary = require("cloudinary").v2;
-const fs = require("fs");
-
 const Registration = require("./models/Registration");
 
 dotenv.config();
-
 const app = express();
+const PORT = process.env.PORT || 5000;
+
+// Middleware
 app.use(cors());
 app.use(express.json());
 
-// Ensure uploads folder exists
-const uploadDir = path.join(__dirname, "uploads");
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
-
-// Multer setup (temporary local storage)
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadDir),
-  filename: (req, file, cb) =>
-    cb(null, Date.now() + path.extname(file.originalname)),
-});
+// Multer setup (memory storage)
+const storage = multer.memoryStorage();
 const upload = multer({ storage });
 
 // Cloudinary config
@@ -34,95 +25,78 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-// Connect MongoDB
-mongoose
-  .connect(process.env.MONGO_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-  })
-  .then(() => console.log("✅ MongoDB connected"))
-  .catch((err) => console.error("❌ MongoDB error:", err));
+// MongoDB connection
+mongoose.connect(process.env.MONGO_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+})
+.then(() => {
+  console.log("✅ MongoDB connected");
+
+  // Start server only after DB connection
+  app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+})
+.catch((err) => console.error("❌ MongoDB error:", err));
+
+// Helper: buffer to data URL
+const bufferToDataURL = (file) => {
+  const mimetype = file.mimetype;
+  const base64 = file.buffer.toString("base64");
+  return `data:${mimetype};base64,${base64}`;
+};
+
+// Root route
+app.get("/", (req, res) => {
+  res.send("🚀 Server is running!");
+});
 
 // Registration API
 app.post("/register", upload.single("paymentScreenshot"), async (req, res) => {
   try {
     const {
-      name,
-      fatherName,
-      age,
-      dob,
-      mobile,
-      email,
-      address,
-      membership,
-      date,
-      paymentMode,
-      amount,
+      name, fatherName, age, dob, mobile,
+      email, address, membership, date,
+      paymentMode, amount
     } = req.body;
 
     // Validate mandatory fields
-    if (
-      !name ||
-      !fatherName ||
-      !age ||
-      !dob ||
-      !mobile ||
-      !email ||
-      !address ||
-      !membership ||
-      !date ||
-      !paymentMode
-    ) {
+    if (!name || !fatherName || !age || !dob || !mobile || !email ||
+        !address || !membership || !date || !paymentMode) {
       return res.status(400).json({ message: "All fields are required" });
-    }
-
-    // If online payment, amount & screenshot are required
-    if (paymentMode === "online") {
-      if (!amount || !req.file) {
-        return res
-          .status(400)
-          .json({ message: "Payment amount and screenshot are required for online payment" });
-      }
     }
 
     let screenshotUrl = null;
 
-    if (req.file) {
-      const result = await cloudinary.uploader.upload(req.file.path, {
+    if (paymentMode === "online") {
+      if (!amount || !req.file) {
+        return res.status(400).json({
+          message: "Payment amount and screenshot required for online payment"
+        });
+      }
+
+      // Convert buffer to data URL and upload
+      const dataUrl = bufferToDataURL(req.file);
+      const result = await cloudinary.uploader.upload(dataUrl, {
         folder: "mandir_upload",
         use_filename: true,
         unique_filename: false,
         overwrite: false,
       });
-      screenshotUrl = result.secure_url;
 
-      // Remove local file after upload
-      fs.unlinkSync(req.file.path);
+      screenshotUrl = result.secure_url;
     }
 
     const newRegistration = new Registration({
-      name,
-      fatherName,
-      age,
-      dob,
-      mobile,
-      email,
-      address,
-      membership,
-      date,
-      paymentMode,
-      amount,
-      paymentScreenshot: screenshotUrl,
+      name, fatherName, age, dob, mobile,
+      email, address, membership, date,
+      paymentMode, amount, paymentScreenshot: screenshotUrl
     });
 
     await newRegistration.save();
     res.status(201).json({ message: "Registration successful" });
+
   } catch (err) {
     console.error("❌ Error:", err);
     res.status(500).json({ message: "Server error" });
   }
 });
- 
-// Start server
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
